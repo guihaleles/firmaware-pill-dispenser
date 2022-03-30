@@ -59,13 +59,46 @@ static void MX_USART1_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void Debug(uint8_t *ch, size_t numElements)
+{
+	HAL_UART_Transmit(&huart2,ch,numElements,10);
+}
+
+void Send_Bluettoh_Data(uint8_t *ch, size_t numElements)
+{
+	HAL_UART_Transmit(&huart1,ch,numElements,10);
+}
+
+void IsAlive()
+{
+  uint8_t data[] = {0};
+  Send_Bluettoh_Data(&data,sizeof(data));
+}
+
+void Command()
+{
+  switch (bluetooth_rxBuffer[5])
+  {
+  case 0x01:
+    IsAlive();
+    break;
+  
+  default:
+    break;
+  }
+
+}
+
 HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if(huart->Instance==USART1){
-    HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
     memcpy(bluetooth_rxBuffer, UART1_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
+    Command();
+    HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
   }
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -257,14 +290,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void Debug(uint8_t *ch, size_t numElements)
-{
-	HAL_UART_Transmit(&huart2,ch,numElements,10);
-}
-void Send_Bluettoh_Data(uint8_t *ch, size_t numElements)
-{
-	HAL_UART_Transmit(&huart1,ch,numElements,10);
-}
+
 /* USER CODE END 4 */
 
 /**
