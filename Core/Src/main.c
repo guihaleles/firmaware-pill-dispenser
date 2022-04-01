@@ -46,6 +46,9 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 uint8_t UART1_rxBuffer[RXBUFFERSIZE] = {0};
 uint8_t bluetooth_rxBuffer[RXBUFFERSIZE] = {0};
+
+uint16_t VirtAddVarTab[NB_OF_VAR] = {0x5555, 0x6666, 0x7777};
+uint16_t VarDataTab[NB_OF_VAR] = {0, 0, 0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -76,6 +79,28 @@ void IsAlive()
   Send_Bluettoh_Data(&data,sizeof(data));
 }
 
+void SetConfigDispenserTime()
+{
+  if((EE_WriteVariable(VirtAddVarTab[0],  (uint16_t)bluetooth_rxBuffer[0])) != HAL_OK)
+  {
+    uint8_t data[] = {9};
+    Send_Bluettoh_Data(&data,sizeof(data));
+  }
+}
+
+void GetConfigDispenserTime()
+{
+  if((EE_ReadVariable(VirtAddVarTab[0],  &VarDataTab[0])) != HAL_OK)
+  {
+    uint8_t data[] = {9};
+    Send_Bluettoh_Data(&data,sizeof(data));
+  }
+
+  uint8_t data = (uint8_t)VarDataTab[0];
+
+  Send_Bluettoh_Data(&data,sizeof(data));
+}
+
 void Command()
 {
   switch (bluetooth_rxBuffer[5])
@@ -83,14 +108,19 @@ void Command()
   case 0x01:
     IsAlive();
     break;
-  
+  case 0x02:
+    SetConfigDispenserTime();
+    break;
+  case 0x03:
+    GetConfigDispenserTime();
+    break;
   default:
     break;
   }
 
 }
 
-HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if(huart->Instance==USART1){
     memcpy(bluetooth_rxBuffer, UART1_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
@@ -117,6 +147,12 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
+  HAL_FLASH_Unlock();
+  if( EE_Init() != EE_OK)
+  {
+    uint8_t data[] = {9};
+    Send_Bluettoh_Data(&data,sizeof(data));
+  }
 
   /* USER CODE END Init */
 
