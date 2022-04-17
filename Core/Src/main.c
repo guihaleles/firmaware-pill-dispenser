@@ -47,7 +47,7 @@ UART_HandleTypeDef huart2;
 uint8_t UART1_rxBuffer[RXBUFFERSIZE] = {0};
 uint8_t bluetooth_rxBuffer[RXBUFFERSIZE] = {0};
 
-uint16_t VirtAddVarTab[NB_OF_VAR] = {0x5555, 0x6666, 0x7777};
+uint16_t VirtAddVarTab[NB_OF_VAR] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
 uint16_t VarDataTab[NB_OF_VAR] = {0, 0, 0};
 /* USER CODE END PV */
 
@@ -81,23 +81,29 @@ void IsAlive()
 
 void SetConfigDispenserTime()
 {
-  if((EE_WriteVariable(VirtAddVarTab[0],  (uint16_t)bluetooth_rxBuffer[0])) != HAL_OK)
+  for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
   {
-    uint8_t data[] = {9};
-    Send_Bluettoh_Data(&data,sizeof(data));
-  }
+    if((EE_WriteVariable(VirtAddVarTab[i],  (uint16_t)bluetooth_rxBuffer[i])) != HAL_OK)
+      {
+        uint8_t error[] = {9};
+        Send_Bluettoh_Data(&error,sizeof(error));
+      }
+  } 
 }
 
 void GetConfigDispenserTime()
 {
-  if((EE_ReadVariable(VirtAddVarTab[0],  &VarDataTab[0])) != HAL_OK)
+  uint8_t data[RXBUFFERSIZE] = {0};
+  
+  for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
   {
-    uint8_t data[] = {9};
-    Send_Bluettoh_Data(&data,sizeof(data));
+	  if((EE_ReadVariable(VirtAddVarTab[i],  &VarDataTab[i])) != HAL_OK)
+	    {
+	      uint8_t error[] = {9};
+	      Send_Bluettoh_Data(&error,sizeof(error));
+	}
+    data[i] = (uint8_t) VarDataTab[i];
   }
-
-  uint8_t data = (uint8_t)VarDataTab[0];
-
   Send_Bluettoh_Data(&data,sizeof(data));
 }
 
