@@ -21,7 +21,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "eeprom.h"
+#include <stdbool.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,6 +32,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define RXBUFFERSIZE                     6
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -39,22 +42,171 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+RTC_HandleTypeDef hrtc;
+
+UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+uint8_t UART1_rxBuffer[RXBUFFERSIZE] = {0};
+uint8_t bluetooth_rxBuffer[RXBUFFERSIZE] = {0};
 
+uint16_t VirtAddVarTab[NB_OF_VAR] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+uint16_t VarDataTab[NB_OF_VAR] = {0, 0, 0};
+
+RTC_TimeTypeDef sTime1;
+RTC_DateTypeDef sDate1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_RTC_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void Debug(uint8_t *ch, size_t numElements)
+{
+	HAL_UART_Transmit(&huart2,ch,numElements,10);
+}
+
+void Send_Bluettoh_Data(uint8_t *ch, size_t numElements)
+{
+	HAL_UART_Transmit(&huart1,ch,numElements,10);
+}
+
+void IsAlive()
+{
+  uint8_t data[] = {0};
+  Send_Bluettoh_Data(&data,sizeof(data));
+}
+
+void SetConfigDispenserTime()
+{
+  for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
+  {
+    if((EE_WriteVariable(VirtAddVarTab[i],  (uint16_t)bluetooth_rxBuffer[i])) != HAL_OK)
+      {
+        uint8_t error[] = {9};
+        Send_Bluettoh_Data(&error,sizeof(error));
+      }
+  } 
+}
+
+void GetConfigDispenserTime(uint8_t* data)
+{
+  for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
+  {
+	  if((EE_ReadVariable(VirtAddVarTab[i],  &VarDataTab[i])) != HAL_OK)
+	    {
+	      uint8_t error[] = {9};
+	}
+    data[i] = (uint8_t) VarDataTab[i];
+  }
+
+}
+
+void UpdateRTC()
+{
+	sDate1.Date = bluetooth_rxBuffer[0];
+	sDate1.Month = bluetooth_rxBuffer[1];
+	sDate1.Year = bluetooth_rxBuffer[2];
+	sTime1.Hours = bluetooth_rxBuffer[3];
+	sTime1.Minutes = bluetooth_rxBuffer[4];
+	sTime1.Seconds = 0x00;
+	HAL_RTC_SetTime(&hrtc, &sTime1, RTC_FORMAT_BCD);
+	HAL_RTC_SetDate(&hrtc, &sDate1, RTC_FORMAT_BCD);
+}
+
+void GetRTC(uint8_t* data)
+{
+
+  HAL_RTC_GetTime(&hrtc, &sTime1, RTC_FORMAT_BCD);
+  HAL_RTC_GetDate(&hrtc, &sDate1, RTC_FORMAT_BCD);
+
+  data[0] = sDate1.Date;
+  data[1] = sDate1.Month;
+  data[2] = sDate1.Year;
+  data[3] = sTime1.Hours;
+  data[4] = sTime1.Minutes;
+  data[5] = sTime1.Seconds;
+
+}
+
+void Command()
+{
+	uint8_t data[RXBUFFERSIZE] = {0};
+  switch (bluetooth_rxBuffer[5])
+  {
+  case 0x01:
+    IsAlive();
+    break;
+  case 0x02:
+    SetConfigDispenserTime();
+    break;
+  case 0x03:
+    GetConfigDispenserTime(data);
+    break;
+  case 0x04:
+    UpdateRTC();
+    break;
+  case 0x05:
+    GetRTC(data);
+    break;
+  default:
+    break;
+  }
+
+  Send_Bluettoh_Data(&data,sizeof(data));
+
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if(huart->Instance==USART1){
+    memcpy(bluetooth_rxBuffer, UART1_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
+    Command();
+    HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
+  }
+}
+
+void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
+{
+
+	uint8_t dispenserTime[RXBUFFERSIZE] = {0};
+	GetConfigDispenserTime(dispenserTime);
+
+	uint8_t rtcTime[RXBUFFERSIZE] = {0};
+	GetRTC(rtcTime);
+
+	bool arrayEqual = true;
+
+	for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
+	{
+		uint8_t aux1 = dispenserTime[i];
+		uint8_t aux2 = rtcTime[i];
+		if(aux1 != aux2)
+		{
+			arrayEqual = false;
+		}
+	}
+
+	if(arrayEqual)
+	{
+		uint8_t initDispenserRotation[RXBUFFERSIZE]	= {0};
+		Send_Bluettoh_Data(&initDispenserRotation,sizeof(initDispenserRotation));
+	}
+
+
+
+}
+
 
 /* USER CODE END 0 */
 
@@ -74,6 +226,12 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
+  HAL_FLASH_Unlock();
+  if( EE_Init() != EE_OK)
+  {
+    uint8_t data[] = {9};
+    Send_Bluettoh_Data(&data,sizeof(data));
+  }
 
   /* USER CODE END Init */
 
@@ -87,8 +245,10 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
+  MX_USART1_UART_Init();
+  MX_RTC_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -118,9 +278,10 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = 16;
@@ -144,6 +305,119 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief RTC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_RTC_Init(void)
+{
+
+  /* USER CODE BEGIN RTC_Init 0 */
+
+  /* USER CODE END RTC_Init 0 */
+
+  RTC_TimeTypeDef sTime = {0};
+  RTC_DateTypeDef sDate = {0};
+  RTC_AlarmTypeDef sAlarm = {0};
+
+  /* USER CODE BEGIN RTC_Init 1 */
+
+  /* USER CODE END RTC_Init 1 */
+  /** Initialize RTC Only
+  */
+  hrtc.Instance = RTC;
+  hrtc.Init.HourFormat = RTC_HOURFORMAT_24;
+  hrtc.Init.AsynchPrediv = 127;
+  hrtc.Init.SynchPrediv = 255;
+  hrtc.Init.OutPut = RTC_OUTPUT_DISABLE;
+  hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
+  hrtc.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
+  if (HAL_RTC_Init(&hrtc) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* USER CODE BEGIN Check_RTC_BKUP */
+
+  /* USER CODE END Check_RTC_BKUP */
+
+  /** Initialize RTC and set the Time and Date
+  */
+  sTime.Hours = 0x13;
+  sTime.Minutes = 0x10;
+  sTime.Seconds = 0x0;
+  sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+  sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sDate.WeekDay = RTC_WEEKDAY_SATURDAY;
+  sDate.Month = RTC_MONTH_APRIL;
+  sDate.Date = 0x23;
+  sDate.Year = 0x0;
+
+  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BCD) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Enable the Alarm A
+  */
+  sAlarm.AlarmTime.Hours = 0x0;
+  sAlarm.AlarmTime.Minutes = 0x0;
+  sAlarm.AlarmTime.Seconds = 0x1;
+  sAlarm.AlarmTime.SubSeconds = 0x0;
+  sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+  sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
+  sAlarm.AlarmMask = RTC_ALARMMASK_ALL;
+  sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
+  sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
+  sAlarm.AlarmDateWeekDay = 0x1;
+  sAlarm.Alarm = RTC_ALARM_A;
+  if (HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, RTC_FORMAT_BCD) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN RTC_Init 2 */
+
+  /* USER CODE END RTC_Init 2 */
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 9600;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
 }
 
 /**
