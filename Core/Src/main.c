@@ -99,21 +99,17 @@ void SetConfigDispenserTime()
   } 
 }
 
-uint8_t* GetConfigDispenserTime()
+void GetConfigDispenserTime(uint8_t* data)
 {
-  uint8_t data[RXBUFFERSIZE] = {0};
-  
   for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
   {
 	  if((EE_ReadVariable(VirtAddVarTab[i],  &VarDataTab[i])) != HAL_OK)
 	    {
 	      uint8_t error[] = {9};
-	      Send_Bluettoh_Data(&error,sizeof(error));
 	}
     data[i] = (uint8_t) VarDataTab[i];
   }
-  Send_Bluettoh_Data(&data,sizeof(data));
-  return data;
+
 }
 
 void UpdateRTC()
@@ -128,9 +124,8 @@ void UpdateRTC()
 	HAL_RTC_SetDate(&hrtc, &sDate1, RTC_FORMAT_BCD);
 }
 
-uint8_t* GetRTC()
+void GetRTC(uint8_t* data)
 {
-  uint8_t data[RXBUFFERSIZE] = {0};
 
   HAL_RTC_GetTime(&hrtc, &sTime1, RTC_FORMAT_BCD);
   HAL_RTC_GetDate(&hrtc, &sDate1, RTC_FORMAT_BCD);
@@ -142,12 +137,11 @@ uint8_t* GetRTC()
   data[4] = sTime1.Minutes;
   data[5] = sTime1.Seconds;
 
-  Send_Bluettoh_Data(&data,sizeof(data));
-  return data;
 }
 
 void Command()
 {
+	uint8_t data[RXBUFFERSIZE] = {0};
   switch (bluetooth_rxBuffer[5])
   {
   case 0x01:
@@ -157,17 +151,19 @@ void Command()
     SetConfigDispenserTime();
     break;
   case 0x03:
-    GetConfigDispenserTime();
+    GetConfigDispenserTime(data);
     break;
   case 0x04:
     UpdateRTC();
     break;
   case 0x05:
-    GetRTC();
+    GetRTC(data);
     break;
   default:
     break;
   }
+
+  Send_Bluettoh_Data(&data,sizeof(data));
 
 }
 
@@ -182,8 +178,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 {
-	uint8_t* dispenserTime = GetConfigDispenserTime();
-	uint8_t* rtcTime = GetRTC();
+
+	uint8_t dispenserTime[RXBUFFERSIZE] = {0};
+	GetConfigDispenserTime(dispenserTime);
+
+	uint8_t rtcTime[RXBUFFERSIZE] = {0};
+	GetRTC(rtcTime);
+
 	bool arrayEqual = true;
 
 	for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
@@ -194,6 +195,12 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 		{
 			arrayEqual = false;
 		}
+	}
+
+	if(arrayEqual)
+	{
+		uint8_t initDispenserRotation[RXBUFFERSIZE]	= {0};
+		Send_Bluettoh_Data(&initDispenserRotation,sizeof(initDispenserRotation));
 	}
 
 
