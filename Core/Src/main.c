@@ -61,6 +61,9 @@ uint16_t position = 0;
 uint16_t target_position = 0;
 bool rotating = false;
 
+uint32_t previousMillis = 0;
+uint32_t currentMillis = 0;
+
 
 RTC_TimeTypeDef sTime1;
 RTC_DateTypeDef sDate1;
@@ -172,7 +175,7 @@ void Command()
   default:
     break;
   }
-  
+
   Send_Bluettoh_Data(&data,sizeof(data));
 
 }
@@ -181,7 +184,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if(huart->Instance==USART1){
     memcpy(bluetooth_rxBuffer, UART1_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
-    Command();
     HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
   }
 }
@@ -210,39 +212,47 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 	if(arrayEqual)
 	{
 		target_position = 1;
-		StartDispenserRotationProcess(0);
+		//StartDispenserRotationProcess(0);
 	}
 }
 
+
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-
-    if(GPIO_Pin == GPIO_PIN_8 && rotating == true)
+	currentMillis = HAL_GetTick();
+    if(GPIO_Pin == GPIO_PIN_8 && (currentMillis - previousMillis > 300))
     {
     	position = position + 1;
     	if(target_position == position)
     	{
     		StopDispenserRotationProcess();
+    		__NOP();
     	}
-    	if(position > target_position)
+    	else if(position > target_position)
     	{
     		StopDispenserRotationProcess();
-    		target_position = 0;
+    		__NOP();
 
+    	} else {
+    		//StartDispenserRotationProcess(target_position);
     	}
+    	previousMillis = currentMillis;
     }
+
 }
 
 void StartDispenserRotationProcess(uint8_t position)
 {
   rotating = true;
-	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+  target_position = position;
+  TIM3->CCR2 = 60;
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 }
 
 void StopDispenserRotationProcess()
 {
   rotating = false;
-	HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_2);
 }
 
 
@@ -291,6 +301,7 @@ int main(void)
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
+  StartDispenserRotationProcess(5);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -495,9 +506,9 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 100;
+  htim3.Init.Prescaler = 84;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 65535;
+  htim3.Init.Period = 100;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -520,14 +531,13 @@ static void MX_TIM3_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 32767;
+  sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.Pulse = 0;
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
@@ -636,10 +646,16 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : Encod2_Pin */
+  GPIO_InitStruct.Pin = Encod2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(Encod2_GPIO_Port, &GPIO_InitStruct);
+
   /*Configure GPIO pin : ENCODER_1_Pin */
   GPIO_InitStruct.Pin = ENCODER_1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(ENCODER_1_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
