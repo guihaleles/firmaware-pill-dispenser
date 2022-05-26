@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "eeprom.h"
 #include <stdbool.h>
+#include "queue.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -32,13 +33,20 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define RXBUFFERSIZE                     6
+#define RXBUFFERSIZE                     8
 
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
+struct message {
+	uint8_t data[RXBUFFERSIZE];
+};
+
+QUEUE_DECLARATION(my_message_queue, struct message, RXBUFFERSIZE);
+QUEUE_DEFINITION(my_message_queue, struct message);
+struct my_message_queue queue;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -53,6 +61,7 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 uint8_t UART1_rxBuffer[RXBUFFERSIZE] = {0};
 uint8_t bluetooth_rxBuffer[RXBUFFERSIZE] = {0};
+uint8_t delimiter = 0x99;
 
 uint16_t VirtAddVarTab[NB_OF_VAR] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
 uint16_t VarDataTab[NB_OF_VAR] = {0, 0, 0};
@@ -67,6 +76,8 @@ uint32_t currentMillis = 0;
 
 RTC_TimeTypeDef sTime1;
 RTC_DateTypeDef sDate1;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -127,14 +138,24 @@ void GetConfigDispenserTime(uint8_t* data)
 
 void UpdateRTC()
 {
+
+	sTime1.Hours = bluetooth_rxBuffer[3];
+	sTime1.Minutes = bluetooth_rxBuffer[4];
+	sTime1.Seconds = bluetooth_rxBuffer[5];
+	sTime1.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+	sTime1.StoreOperation = RTC_STOREOPERATION_RESET;
+	if (HAL_RTC_SetTime(&hrtc, &sTime1, RTC_FORMAT_BCD) != HAL_OK)
+	{
+		Error_Handler();
+	}
+
 	sDate1.Date = bluetooth_rxBuffer[0];
 	sDate1.Month = bluetooth_rxBuffer[1];
 	sDate1.Year = bluetooth_rxBuffer[2];
-	sTime1.Hours = bluetooth_rxBuffer[3];
-	sTime1.Minutes = bluetooth_rxBuffer[4];
-	sTime1.Seconds = 0x00;
-	HAL_RTC_SetTime(&hrtc, &sTime1, RTC_FORMAT_BCD);
-	HAL_RTC_SetDate(&hrtc, &sDate1, RTC_FORMAT_BCD);
+	if (HAL_RTC_SetDate(&hrtc, &sDate1, RTC_FORMAT_BCD) != HAL_OK)
+	{
+		Error_Handler();
+	}
 }
 
 void GetRTC(uint8_t* data)
@@ -152,38 +173,54 @@ void GetRTC(uint8_t* data)
 
 }
 
+StartInsertionProcess(uint8_t* data)
+{
+	uint8_t position = bluetooth_rxBuffer[RXBUFFERSIZE-2];
+
+	StartDispenserRotationProcess(position);
+
+	memcpy(data, bluetooth_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
+}
+
 void Command()
 {
-	uint8_t data[RXBUFFERSIZE] = {0};
+  uint8_t data[RXBUFFERSIZE] = {0};
   switch (bluetooth_rxBuffer[RXBUFFERSIZE-1])
   {
-  case 0x01:
+  case 1:
     IsAlive();
     break;
-  case 0x02:
+  case 2:
     SetConfigDispenserTime();
     break;
-  case 0x03:
+  case 3:
     GetConfigDispenserTime(data);
     break;
-  case 0x04:
+  case 4:
     UpdateRTC();
     break;
-  case 0x05:
+  case 5:
     GetRTC(data);
     break;
+  case 6:
+	StartDispenserRotationProcess(bluetooth_rxBuffer[RXBUFFERSIZE-2]);
+  case 11:
+	StartInsertionProcess(data);
   default:
     break;
   }
 
   Send_Bluettoh_Data(&data,sizeof(data));
 
+
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if(huart->Instance==USART1){
-    memcpy(bluetooth_rxBuffer, UART1_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
+	struct message msg;
+	memcpy(msg.data, UART1_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
+	enum enqueue_result result1 = my_message_queue_enqueue(&queue, &msg);
     HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
   }
 }
@@ -199,7 +236,7 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 
 	bool arrayEqual = true;
 
-	for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
+	for(uint8_t i = 0; i < RXBUFFERSIZE-2; i++)
 	{
 		uint8_t aux1 = dispenserTime[i];
 		uint8_t aux2 = rtcTime[i];
@@ -211,8 +248,12 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 
 	if(arrayEqual)
 	{
+
 		target_position = 1;
-		//StartDispenserRotationProcess(0);
+		struct message msg = {
+			.data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 1, 11}
+		 };
+		enum enqueue_result result1 = my_message_queue_enqueue(&queue, &msg);
 	}
 }
 
@@ -220,7 +261,7 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 	currentMillis = HAL_GetTick();
-    if(GPIO_Pin == GPIO_PIN_8 && (currentMillis - previousMillis > 300))
+    if(GPIO_Pin == GPIO_PIN_8 && (currentMillis - previousMillis > 300) && rotating)
     {
     	position = position + 1;
     	if(target_position == position)
@@ -233,18 +274,17 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     		StopDispenserRotationProcess();
     		__NOP();
 
-    	} else {
-    		//StartDispenserRotationProcess(target_position);
     	}
     	previousMillis = currentMillis;
     }
 
 }
 
-void StartDispenserRotationProcess(uint8_t position)
+void StartDispenserRotationProcess(uint8_t _target_position)
 {
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
   rotating = true;
-  target_position = position;
+  target_position = _target_position;
   TIM3->CCR2 = 60;
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 }
@@ -273,7 +313,8 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+
+	HAL_Init();
 
   /* USER CODE BEGIN Init */
   HAL_FLASH_Unlock();
@@ -301,7 +342,8 @@ int main(void)
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
-  StartDispenserRotationProcess(5);
+  my_message_queue_init(&queue);
+  //StartDispenserRotationProcess(5);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -311,6 +353,13 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+	  struct message msg;
+	  enum dequeue_result result2 = my_message_queue_dequeue(&queue, &msg);
+	  if (result2 == DEQUEUE_RESULT_SUCCESS) {
+		  memcpy(bluetooth_rxBuffer, msg.data, RXBUFFERSIZE * sizeof(uint8_t));
+		  Command();
+	  }
   }
   /* USER CODE END 3 */
 }
@@ -399,9 +448,9 @@ static void MX_RTC_Init(void)
 
   /** Initialize RTC and set the Time and Date
   */
-  sTime.Hours = 0x13;
-  sTime.Minutes = 0x10;
-  sTime.Seconds = 0x0;
+  sTime.Hours = 0x23;
+  sTime.Minutes = 0x59;
+  sTime.Seconds = 0x50;
   sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
   sTime.StoreOperation = RTC_STOREOPERATION_RESET;
   if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK)
