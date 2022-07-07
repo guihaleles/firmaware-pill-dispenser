@@ -34,7 +34,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define RXBUFFERSIZE                     8
-
+#define stepsperrev 4096
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -94,6 +94,75 @@ static void MX_TIM1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void stepper_set_rpm (int rpm)  // Set rpm--> max 13, min 1,,,  went to 14 rev/min
+{
+	HAL_Delay(60000*2/stepsperrev/rpm);
+}
+
+void stepper_wave_drive (int step)
+{
+	switch (step){
+
+		case 0:
+			  HAL_GPIO_WritePin(GPIOC, Motor1_Pin, GPIO_PIN_SET);   // IN1
+			  HAL_GPIO_WritePin(GPIOC, Motor2_Pin, GPIO_PIN_RESET);   // IN2
+			  HAL_GPIO_WritePin(GPIOC, Motor3_Pin, GPIO_PIN_RESET);   // IN3
+			  HAL_GPIO_WritePin(GPIOC, Motor4_Pin, GPIO_PIN_RESET);   // IN4
+			  break;
+
+		case 1:
+			  HAL_GPIO_WritePin(GPIOC, Motor1_Pin, GPIO_PIN_RESET);   // IN1
+			  HAL_GPIO_WritePin(GPIOC, Motor2_Pin, GPIO_PIN_SET);   // IN2
+			  HAL_GPIO_WritePin(GPIOC, Motor3_Pin, GPIO_PIN_RESET);   // IN3
+			  HAL_GPIO_WritePin(GPIOC, Motor4_Pin, GPIO_PIN_RESET);   // IN4
+			  break;
+
+		case 2:
+			  HAL_GPIO_WritePin(GPIOC, Motor1_Pin, GPIO_PIN_RESET);   // IN1
+			  HAL_GPIO_WritePin(GPIOC, Motor2_Pin, GPIO_PIN_RESET);   // IN2
+			  HAL_GPIO_WritePin(GPIOC, Motor3_Pin, GPIO_PIN_SET);   // IN3
+			  HAL_GPIO_WritePin(GPIOC, Motor4_Pin, GPIO_PIN_RESET);   // IN4
+			  break;
+
+		case 3:
+			  HAL_GPIO_WritePin(GPIOC, Motor1_Pin, GPIO_PIN_RESET);   // IN1
+			  HAL_GPIO_WritePin(GPIOC, Motor2_Pin, GPIO_PIN_RESET);   // IN2
+			  HAL_GPIO_WritePin(GPIOC, Motor3_Pin, GPIO_PIN_RESET);   // IN3
+			  HAL_GPIO_WritePin(GPIOC, Motor4_Pin, GPIO_PIN_SET);   // IN4
+			  break;
+
+		}
+}
+
+
+void stepper_step_angle (float angle, int direction, int rpm)
+{
+	float anglepersequence = 0.703125;  // 360 = 512 sequences
+	int numberofsequences = (int) (angle/anglepersequence);
+
+	for (int seq=0; seq<numberofsequences; seq++)
+	{
+		if (direction == 0)  // for clockwise
+		{
+			for (int step=4; step>=0; step--)
+			{
+				stepper_wave_drive(step);
+				stepper_set_rpm(rpm);
+			}
+
+		}
+
+		else if (direction == 1)  // for anti-clockwise
+		{
+			for (int step=0; step<5; step++)
+			{
+				stepper_wave_drive(step);
+				stepper_set_rpm(rpm);
+			}
+		}
+	}
+}
 
 void Debug(uint8_t *ch, size_t numElements)
 {
@@ -275,8 +344,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     		__NOP();
 
     	}
-    	previousMillis = currentMillis;
     }
+    previousMillis = currentMillis;
 
 }
 
@@ -313,8 +382,7 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-
-	HAL_Init();
+  HAL_Init();
 
   /* USER CODE BEGIN Init */
   HAL_FLASH_Unlock();
@@ -682,6 +750,9 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, Motor1_Pin|Motor2_Pin|Motor3_Pin|Motor4_Pin, GPIO_PIN_RESET);
+
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
@@ -695,17 +766,24 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Encod2_Pin */
-  GPIO_InitStruct.Pin = Encod2_Pin;
+  /*Configure GPIO pins : Motor1_Pin Motor2_Pin Motor3_Pin Motor4_Pin */
+  GPIO_InitStruct.Pin = Motor1_Pin|Motor2_Pin|Motor3_Pin|Motor4_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : SENSOR_PILULA_Pin SENSOR_HOME_Pin */
+  GPIO_InitStruct.Pin = SENSOR_PILULA_Pin|SENSOR_HOME_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(Encod2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : ENCODER_1_Pin */
-  GPIO_InitStruct.Pin = ENCODER_1_Pin;
+  /*Configure GPIO pin : ENCODER_Pin */
+  GPIO_InitStruct.Pin = ENCODER_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(ENCODER_1_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(ENCODER_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
