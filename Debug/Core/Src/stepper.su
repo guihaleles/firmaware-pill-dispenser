@@ -1,0 +1,5 @@
+stepper.c:4:6:stepper_set_rpm	16	static
+stepper.c:9:6:stepper_wave_drive	16	static
+stepper.c:46:5:getFinalAngleBySlot	16	static
+stepper.c:51:5:getInitialAngleBySlot	16	static
+stepper.c:57:5:getSlotByAngle	24	static

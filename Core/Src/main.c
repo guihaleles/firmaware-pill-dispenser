@@ -21,9 +21,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "eeprom.h"
 #include <stdbool.h>
 #include "queue.h"
+#include "eeprom.h"
+#include "stepper.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -34,7 +35,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define RXBUFFERSIZE                     8
-#define stepsperrev 4096
+#define SLOTS                            8
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -63,16 +64,21 @@ uint8_t UART1_rxBuffer[RXBUFFERSIZE] = {0};
 uint8_t bluetooth_rxBuffer[RXBUFFERSIZE] = {0};
 uint8_t delimiter = 0x99;
 
-uint16_t VirtAddVarTab[NB_OF_VAR] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
-uint16_t VarDataTab[NB_OF_VAR] = {0, 0, 0};
+uint16_t VirtAddVarTab[SLOTS][NB_OF_VAR] = {{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+                                    {0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19},
+                                    {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29},
+                                    {0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39},
+                                    {0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49},
+                                    {0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59},
+                                    {0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69},
+                                    {0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79}};
 
-uint16_t position = 0;
-uint16_t target_position = 0;
-bool rotating = false;
 
-uint32_t previousMillis = 0;
-uint32_t currentMillis = 0;
 
+uint8_t configDispenserTime[SLOTS][RXBUFFERSIZE] = {0};
+
+uint8_t position_state = 100;
+float angle_state = 900;
 
 RTC_TimeTypeDef sTime1;
 RTC_DateTypeDef sDate1;
@@ -95,74 +101,6 @@ static void MX_TIM1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-void stepper_set_rpm (int rpm)  // Set rpm--> max 13, min 1,,,  went to 14 rev/min
-{
-	HAL_Delay(60000*2/stepsperrev/rpm);
-}
-
-void stepper_wave_drive (int step)
-{
-	switch (step){
-
-		case 0:
-			  HAL_GPIO_WritePin(GPIOC, Motor1_Pin, GPIO_PIN_SET);   // IN1
-			  HAL_GPIO_WritePin(GPIOC, Motor2_Pin, GPIO_PIN_RESET);   // IN2
-			  HAL_GPIO_WritePin(GPIOC, Motor3_Pin, GPIO_PIN_RESET);   // IN3
-			  HAL_GPIO_WritePin(GPIOC, Motor4_Pin, GPIO_PIN_RESET);   // IN4
-			  break;
-
-		case 1:
-			  HAL_GPIO_WritePin(GPIOC, Motor1_Pin, GPIO_PIN_RESET);   // IN1
-			  HAL_GPIO_WritePin(GPIOC, Motor2_Pin, GPIO_PIN_SET);   // IN2
-			  HAL_GPIO_WritePin(GPIOC, Motor3_Pin, GPIO_PIN_RESET);   // IN3
-			  HAL_GPIO_WritePin(GPIOC, Motor4_Pin, GPIO_PIN_RESET);   // IN4
-			  break;
-
-		case 2:
-			  HAL_GPIO_WritePin(GPIOC, Motor1_Pin, GPIO_PIN_RESET);   // IN1
-			  HAL_GPIO_WritePin(GPIOC, Motor2_Pin, GPIO_PIN_RESET);   // IN2
-			  HAL_GPIO_WritePin(GPIOC, Motor3_Pin, GPIO_PIN_SET);   // IN3
-			  HAL_GPIO_WritePin(GPIOC, Motor4_Pin, GPIO_PIN_RESET);   // IN4
-			  break;
-
-		case 3:
-			  HAL_GPIO_WritePin(GPIOC, Motor1_Pin, GPIO_PIN_RESET);   // IN1
-			  HAL_GPIO_WritePin(GPIOC, Motor2_Pin, GPIO_PIN_RESET);   // IN2
-			  HAL_GPIO_WritePin(GPIOC, Motor3_Pin, GPIO_PIN_RESET);   // IN3
-			  HAL_GPIO_WritePin(GPIOC, Motor4_Pin, GPIO_PIN_SET);   // IN4
-			  break;
-
-		}
-}
-
-
-void stepper_step_angle (float angle, int direction, int rpm)
-{
-	float anglepersequence = 0.703125;  // 360 = 512 sequences
-	int numberofsequences = (int) (angle/anglepersequence);
-
-	for (int seq=0; seq<numberofsequences; seq++)
-	{
-		if (direction == 0)  // for clockwise
-		{
-			for (int step=4; step>=0; step--)
-			{
-				stepper_wave_drive(step);
-				stepper_set_rpm(rpm);
-			}
-
-		}
-
-		else if (direction == 1)  // for anti-clockwise
-		{
-			for (int step=0; step<5; step++)
-			{
-				stepper_wave_drive(step);
-				stepper_set_rpm(rpm);
-			}
-		}
-	}
-}
 
 void Debug(uint8_t *ch, size_t numElements)
 {
@@ -180,11 +118,11 @@ void IsAlive()
   Send_Bluettoh_Data(&data,sizeof(data));
 }
 
-void SetConfigDispenserTime()
-{
-  for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
+SetSlotPillInserted()
+{  
+  for(uint8_t slot = 0; slot < SLOTS; slot++)
   {
-    if((EE_WriteVariable(VirtAddVarTab[i],  (uint16_t)bluetooth_rxBuffer[i])) != HAL_OK)
+    if((EE_WriteVariable(VirtAddVarTab[0][slot],  (uint16_t)configDispenserTime[slot])) != HAL_OK)
       {
         uint8_t error[] = {9};
         Send_Bluettoh_Data(&error,sizeof(error));
@@ -192,17 +130,62 @@ void SetConfigDispenserTime()
   } 
 }
 
-void GetConfigDispenserTime(uint8_t* data)
+void GetSlotsPillsInserted(uint8_t* output)
 {
+  uint16_t VarDataTab[NB_OF_VAR] = {0};
   for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
   {
-	  if((EE_ReadVariable(VirtAddVarTab[i],  &VarDataTab[i])) != HAL_OK)
-	    {
+	  if((EE_ReadVariable(VirtAddVarTab[0][i],  &VarDataTab[i])) != HAL_OK)
+	  {
 	      uint8_t error[] = {9};
-	}
-    data[i] = (uint8_t) VarDataTab[i];
+	  }
+    output[i] = (uint8_t) VarDataTab[i];
   }
+}
 
+void SetConfigDispenserTime(uint8_t* input)
+{
+  int slot = input[RXBUFFERSIZE-2];
+  for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
+  {
+    if((EE_WriteVariable(VirtAddVarTab[slot][i],  (uint16_t)input[i])) != HAL_OK)
+      {
+        uint8_t error[] = {9};
+        Send_Bluettoh_Data(&error,sizeof(error));
+      }
+      configDispenserTime[slot][i] = (uint8_t) input[i];
+  } 
+}
+
+void GetConfigDispenserTime(uint8_t* output, int slot)
+{
+  uint16_t VarDataTab[NB_OF_VAR] = {0};
+  for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
+  {
+	  if((EE_ReadVariable(VirtAddVarTab[slot][i],  &VarDataTab[i])) != HAL_OK)
+	  {
+	      uint8_t error[] = {9};
+	  }
+    output[i] = (uint8_t) VarDataTab[i];
+  }
+}
+
+void LoadConfigDispenserTime()
+{
+  uint16_t VarDataTab[NB_OF_VAR] = {0};
+   for(int slot = 1; slot< SLOTS; slot++)
+   {
+  
+    for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
+    {
+      if((EE_ReadVariable(VirtAddVarTab[slot][i],  &VarDataTab[i])) != HAL_OK)
+      {
+          uint8_t error[] = {9};
+      }
+      configDispenserTime[slot][i] = (uint8_t) VarDataTab[i];
+    }
+  
+  }
 }
 
 void UpdateRTC()
@@ -227,61 +210,95 @@ void UpdateRTC()
 	}
 }
 
-void GetRTC(uint8_t* data)
+void GetRTC(uint8_t* output)
 {
 
   HAL_RTC_GetTime(&hrtc, &sTime1, RTC_FORMAT_BCD);
   HAL_RTC_GetDate(&hrtc, &sDate1, RTC_FORMAT_BCD);
 
-  data[0] = sDate1.Date;
-  data[1] = sDate1.Month;
-  data[2] = sDate1.Year;
-  data[3] = sTime1.Hours;
-  data[4] = sTime1.Minutes;
-  data[5] = sTime1.Seconds;
+  output[0] = sDate1.Date;
+  output[1] = sDate1.Month;
+  output[2] = sDate1.Year;
+  output[3] = sTime1.Hours;
+  output[4] = sTime1.Minutes;
+  output[5] = sTime1.Seconds;
 
 }
 
-StartInsertionProcess(uint8_t* data)
+void StartDispenserRotationProcess(uint8_t* output)
+{
+  uint8_t position = bluetooth_rxBuffer[RXBUFFERSIZE-2];
+
+	goToPosition(position);
+  
+  SetConfigDispenserTime(output);
+
+	memcpy(output, bluetooth_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
+}
+
+FinishDispenserRotationProcess(uint8_t* output)
+{
+  goHome();
+	memcpy(output, bluetooth_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
+}
+
+StartInsertionProcess(uint8_t* output)
 {
 	uint8_t position = bluetooth_rxBuffer[RXBUFFERSIZE-2];
 
-	StartDispenserRotationProcess(position);
+	goToPosition(position);
 
-	memcpy(data, bluetooth_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
+	memcpy(output, bluetooth_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
+}
+
+FinishInsetionProcess(uint8_t* output)
+{
+  goHome();
+	memcpy(output, bluetooth_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
 }
 
 void Command()
 {
-  uint8_t data[RXBUFFERSIZE] = {0};
+  uint8_t output[RXBUFFERSIZE] = {0};
+
   switch (bluetooth_rxBuffer[RXBUFFERSIZE-1])
   {
   case 1:
     IsAlive();
     break;
   case 2:
-    SetConfigDispenserTime();
+    SetConfigDispenserTime(bluetooth_rxBuffer);
     break;
   case 3:
-    GetConfigDispenserTime(data);
+    GetConfigDispenserTime(output, bluetooth_rxBuffer[RXBUFFERSIZE-2]);
     break;
   case 4:
     UpdateRTC();
     break;
   case 5:
-    GetRTC(data);
+    GetRTC(output);
     break;
   case 6:
-	StartDispenserRotationProcess(bluetooth_rxBuffer[RXBUFFERSIZE-2]);
+	  StartDispenserRotationProcess(output);
+    break;
+  case 7:
+	  FinishDispenserRotationProcess(output);
+    break;
   case 11:
-	StartInsertionProcess(data);
+	  StartInsertionProcess(output);
+    break;
+  case 12:
+	  FinishInsetionProcess(output);
+    break;
+  case 15:
+	  GetPosition(output);
+  case 16:
+	  GetSlotsPillsInserted(output);
   default:
     break;
   }
 
-  Send_Bluettoh_Data(&data,sizeof(data));
-
-
+  Send_Bluettoh_Data(&output,sizeof(output));
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
@@ -290,7 +307,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	struct message msg;
 	memcpy(msg.data, UART1_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
 	enum enqueue_result result1 = my_message_queue_enqueue(&queue, &msg);
-    HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
+  HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
   }
 }
 
@@ -298,70 +315,149 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 {
 
 	uint8_t dispenserTime[RXBUFFERSIZE] = {0};
-	GetConfigDispenserTime(dispenserTime);
-
 	uint8_t rtcTime[RXBUFFERSIZE] = {0};
 	GetRTC(rtcTime);
 
-	bool arrayEqual = true;
+  for(int slot = 1; slot< SLOTS; slot++)
+  {
+    //GetConfigDispenserTime(dispenserTime,i);
 
-	for(uint8_t i = 0; i < RXBUFFERSIZE-2; i++)
+    bool arrayEqual = true;
+
+    for(uint8_t i = 0; i < RXBUFFERSIZE-2; i++)
+    {
+      uint8_t aux1 = configDispenserTime[slot][i];
+      uint8_t aux2 = rtcTime[i];
+      if(aux1 != aux2)
+      {
+        arrayEqual = false;
+        break;
+      }
+    }
+
+    if(arrayEqual)
+    {
+      uint8_t data[RXBUFFERSIZE] = {0};
+      data[RXBUFFERSIZE-1] = 6;
+      data[RXBUFFERSIZE-2] = slot;
+      struct message msg;
+      memcpy(msg.data, data, RXBUFFERSIZE * sizeof(uint8_t));
+      enum enqueue_result result1 = my_message_queue_enqueue(&queue, &msg);
+
+    }
+
+  }	
+}
+
+void stepper_step_angle (float angle, int direction)
+{
+	float anglepersequence = 0.703125;  // 360 = 512 sequences
+	int numberofsequences = (int) (angle/anglepersequence);
+  int rpm = 5;
+  int presenceAux = false;
+  int actualSlot = getSlotByAngle((int)angle_state);
+
+	for (int seq=0; seq<numberofsequences; seq++)
 	{
-		uint8_t aux1 = dispenserTime[i];
-		uint8_t aux2 = rtcTime[i];
-		if(aux1 != aux2)
+		if (direction == 0)  // for clockwise
 		{
-			arrayEqual = false;
+      angle_state = angle_state - 0.703125;
+
+      if(HAL_GPIO_ReadPin(GPIOA, P1_Pin) || HAL_GPIO_ReadPin(GPIOA, P2_Pin) || HAL_GPIO_ReadPin(GPIOB, P3_Pin))
+      { 
+        HAL_GPIO_WritePin(GPIOA,LD2_Pin,GPIO_PIN_SET);
+        presenceAux = true;      
+      } else{
+    	  HAL_GPIO_WritePin(GPIOA,LD2_Pin,GPIO_PIN_RESET);
+      }
+
+      if(actualSlot != getSlotByAngle((int)angle_state))
+      {
+        configDispenserTime[0][actualSlot] = presenceAux;
+        actualSlot = getSlotByAngle(angle_state);
+        presenceAux = false;
+      }      
+
+			for (int step=4; step>=0; step--)
+			{
+				stepper_wave_drive(step);
+				stepper_set_rpm(rpm);
+			}
+
+		}
+
+		else if (direction == 1)  // for anti-clockwise
+		{
+      angle_state = angle_state + 0.703125;
+      
+			for (int step=0; step<5; step++)
+			{
+				stepper_wave_drive(step);
+				stepper_set_rpm(rpm);
+			}   
 		}
 	}
 
-	if(arrayEqual)
-	{
-
-		target_position = 1;
-		struct message msg = {
-			.data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 1, 11}
-		 };
-		enum enqueue_result result1 = my_message_queue_enqueue(&queue, &msg);
-	}
 }
 
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+
+
+goToPosition(int target)
 {
-	currentMillis = HAL_GetTick();
-    if(GPIO_Pin == GPIO_PIN_8 && (currentMillis - previousMillis > 300) && rotating)
+  if(target == position_state)
+  {
+    return;
+  }
+
+  if(position_state != 0)
+  {
+    goHome();
+  }
+
+  int angle = getFinalAngleBySlot(target);
+
+  stepper_step_angle(angle,1);
+
+  position_state = target;
+  HAL_GPIO_WritePin(GPIOA,LD2_Pin,GPIO_PIN_RESET);
+}
+
+goHome()
+{
+  if(position_state == 0)
+  {
+    return;
+  }
+
+  int debounce = 0; 
+  int i = 1140;
+  while(i > 0)
+  {    
+    if(!HAL_GPIO_ReadPin(GPIOA, HOME_Pin))
     {
-    	position = position + 1;
-    	if(target_position == position)
-    	{
-    		StopDispenserRotationProcess();
-    		__NOP();
-    	}
-    	else if(position > target_position)
-    	{
-    		StopDispenserRotationProcess();
-    		__NOP();
-
-    	}
+      if(debounce == 2)
+      {
+        stepper_step_angle(5,0);
+        position_state = 0;
+        angle_state = 0;
+        return;
+      } 
+      else
+      {
+        debounce = debounce+1;
+      }     
     }
-    previousMillis = currentMillis;
+    stepper_step_angle(1,0);
+    i = i-1;
+  }
 
 }
 
-void StartDispenserRotationProcess(uint8_t _target_position)
+GetPosition(uint8_t* output)
 {
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
-  rotating = true;
-  target_position = _target_position;
-  TIM3->CCR2 = 60;
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
-}
-
-void StopDispenserRotationProcess()
-{
-  rotating = false;
-  HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_2);
+  output[RXBUFFERSIZE-1] = 15;
+  output[RXBUFFERSIZE-2] = position_state;
 }
 
 
@@ -411,7 +507,10 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_UART_Receive_IT(&huart1,UART1_rxBuffer,RXBUFFERSIZE);
   my_message_queue_init(&queue);
-  //StartDispenserRotationProcess(5);
+
+  LoadConfigDispenserTime();
+  
+  goHome();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -422,12 +521,18 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
+
 	  struct message msg;
 	  enum dequeue_result result2 = my_message_queue_dequeue(&queue, &msg);
 	  if (result2 == DEQUEUE_RESULT_SUCCESS) {
 		  memcpy(bluetooth_rxBuffer, msg.data, RXBUFFERSIZE * sizeof(uint8_t));
 		  Command();
 	  }
+
+    if(!HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13))
+    {
+    	stepper_step_angle(5,0);
+    }
   }
   /* USER CODE END 3 */
 }
@@ -715,11 +820,11 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 9600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.Mode = UART_MODE_TX;
   huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart2.Init.OverSampling = UART_OVERSAMPLING_16;
   if (HAL_UART_Init(&huart2) != HAL_OK)
@@ -759,6 +864,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : HOME_Pin P1_Pin P2_Pin */
+  GPIO_InitStruct.Pin = HOME_Pin|P1_Pin|P2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
   /*Configure GPIO pin : LD2_Pin */
   GPIO_InitStruct.Pin = LD2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -773,21 +884,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SENSOR_PILULA_Pin SENSOR_HOME_Pin */
-  GPIO_InitStruct.Pin = SENSOR_PILULA_Pin|SENSOR_HOME_Pin;
+  /*Configure GPIO pin : P3_Pin */
+  GPIO_InitStruct.Pin = P3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(P3_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SENSOR_PILULA_Pin */
+  GPIO_InitStruct.Pin = SENSOR_PILULA_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : ENCODER_Pin */
-  GPIO_InitStruct.Pin = ENCODER_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(ENCODER_GPIO_Port, &GPIO_InitStruct);
-
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+  HAL_GPIO_Init(SENSOR_PILULA_GPIO_Port, &GPIO_InitStruct);
 
 }
 
