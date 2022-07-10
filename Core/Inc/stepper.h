@@ -15,5 +15,7 @@ void stepper_wave_drive (int step);
 void stepper_step_angle (float angle, int direction, int rpm);
 int getSlotByAngle(int angle);
 int getFinalAngleBySlot(int slot) ;
+int getInitialAngleBySlot(int slot) ;
+
 
 #endif /* __EEPROM_H */

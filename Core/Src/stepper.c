@@ -41,16 +41,19 @@ void stepper_wave_drive (int step)
 		}
 }
 
-int angles[8][2] = {{0,1},{1,45},{45,90},{90,134},{135,180},{180,224},{225,270},{270,315}};
+int angles[8][2] = {{0,8},{10,32},{42,73},{82,115},{125,160},{180,224},{225,270},{270,315}};
+// 4 ->120
+// 3 ->78
+//2-> 37
 
 int getFinalAngleBySlot(int slot) 
 {
-  return angles[slot][1]-1;
+  return angles[slot][1];
 }
 
 int getInitialAngleBySlot(int slot) 
 {
-  return angles[slot][0]-1;
+  return angles[slot][0];
 }
 
 
@@ -64,6 +67,8 @@ int getSlotByAngle(int angle)
       return i;
     }
   }
+
+  return 0;
 
 }
 

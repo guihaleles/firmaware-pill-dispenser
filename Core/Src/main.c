@@ -122,7 +122,7 @@ SetSlotPillInserted()
 {  
   for(uint8_t slot = 0; slot < SLOTS; slot++)
   {
-    if((EE_WriteVariable(VirtAddVarTab[0][slot],  (uint16_t)configDispenserTime[slot])) != HAL_OK)
+    if((EE_WriteVariable(VirtAddVarTab[0][slot],  (uint16_t)configDispenserTime[0][slot])) != HAL_OK)
       {
         uint8_t error[] = {9};
         Send_Bluettoh_Data(&error,sizeof(error));
@@ -133,14 +133,15 @@ SetSlotPillInserted()
 void GetSlotsPillsInserted(uint8_t* output)
 {
   uint16_t VarDataTab[NB_OF_VAR] = {0};
-  for(uint8_t i = 0; i < RXBUFFERSIZE; i++)
+  for(uint8_t i = 1; i < RXBUFFERSIZE; i++)
   {
 	  if((EE_ReadVariable(VirtAddVarTab[0][i],  &VarDataTab[i])) != HAL_OK)
 	  {
 	      uint8_t error[] = {9};
 	  }
-    output[i] = (uint8_t) VarDataTab[i];
+    output[i-1] = (uint8_t) VarDataTab[i];
   }
+  output[RXBUFFERSIZE-1] = 16;
 }
 
 void SetConfigDispenserTime(uint8_t* input)
@@ -168,6 +169,7 @@ void GetConfigDispenserTime(uint8_t* output, int slot)
 	  }
     output[i] = (uint8_t) VarDataTab[i];
   }
+  output[RXBUFFERSIZE-3] = configDispenserTime[0][slot];
 }
 
 void LoadConfigDispenserTime()
@@ -230,8 +232,23 @@ void StartDispenserRotationProcess(uint8_t* output)
   uint8_t position = bluetooth_rxBuffer[RXBUFFERSIZE-2];
 
 	goToPosition(position);
-  
-  SetConfigDispenserTime(output);
+
+  int millis = HAL_GetTick();
+
+  SetConfigDispenserTime(bluetooth_rxBuffer);
+
+  while(HAL_GetTick() - millis < 60000)
+  {
+    if(!HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13))
+    {
+      break;
+    }
+  }
+
+  goHome();
+
+  configDispenserTime[position][RXBUFFERSIZE-1] = 6; 
+  SetConfigDispenserTime(configDispenserTime[position]);
 
 	memcpy(output, bluetooth_rxBuffer, RXBUFFERSIZE * sizeof(uint8_t));
 }
@@ -292,8 +309,13 @@ void Command()
     break;
   case 15:
 	  GetPosition(output);
+	  break;
   case 16:
-	  GetSlotsPillsInserted(output);
+	  GetSlotsPillsInserted(output);  
+	  break;
+  case 21:
+    dipenserAlarm();
+    break;
   default:
     break;
   }
@@ -338,7 +360,7 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
     if(arrayEqual)
     {
       uint8_t data[RXBUFFERSIZE] = {0};
-      data[RXBUFFERSIZE-1] = 6;
+      data[RXBUFFERSIZE-1] = 21;
       data[RXBUFFERSIZE-2] = slot;
       struct message msg;
       memcpy(msg.data, data, RXBUFFERSIZE * sizeof(uint8_t));
@@ -359,8 +381,16 @@ void stepper_step_angle (float angle, int direction)
 
 	for (int seq=0; seq<numberofsequences; seq++)
 	{
+
+
 		if (direction == 0)  // for clockwise
 		{
+      if(!HAL_GPIO_ReadPin(GPIOA, HOME_Pin) )
+      {
+        angle_state = 0;
+        position_state = 0;
+        break;
+      }
       angle_state = angle_state - 0.703125;
 
       if(HAL_GPIO_ReadPin(GPIOA, P1_Pin) || HAL_GPIO_ReadPin(GPIOA, P2_Pin) || HAL_GPIO_ReadPin(GPIOB, P3_Pin))
@@ -371,10 +401,12 @@ void stepper_step_angle (float angle, int direction)
     	  HAL_GPIO_WritePin(GPIOA,LD2_Pin,GPIO_PIN_RESET);
       }
 
-      if(actualSlot != getSlotByAngle((int)angle_state))
+      int aux = getSlotByAngle((int)angle_state);
+      if(actualSlot != aux )
       {
         configDispenserTime[0][actualSlot] = presenceAux;
-        actualSlot = getSlotByAngle(angle_state);
+        SetSlotPillInserted();
+        actualSlot = aux;
         presenceAux = false;
       }      
 
@@ -401,8 +433,6 @@ void stepper_step_angle (float angle, int direction)
 }
 
 
-
-
 goToPosition(int target)
 {
   if(target == position_state)
@@ -415,12 +445,48 @@ goToPosition(int target)
     goHome();
   }
 
-  int angle = getFinalAngleBySlot(target);
+  int angle = getFinalAngleBySlot(target+1);
 
   stepper_step_angle(angle,1);
 
   position_state = target;
   HAL_GPIO_WritePin(GPIOA,LD2_Pin,GPIO_PIN_RESET);
+}
+
+startBuzzer(int value)
+{
+  htim3.Instance->CCR1 = value; // vary the duty cycle
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);	
+}
+
+stopBuzzer()
+{
+	HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_1);
+}
+
+dipenserAlarm()
+{
+  int millis = HAL_GetTick();
+
+  uint8_t buzzerValue = 50;
+  
+  startBuzzer(buzzerValue);
+  while(HAL_GetTick() - millis < 60000)
+  {
+    if(!HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13))
+    {
+      uint8_t data[RXBUFFERSIZE] = {0};
+      data[RXBUFFERSIZE-1] = 6;
+      data[RXBUFFERSIZE-2] = bluetooth_rxBuffer[RXBUFFERSIZE-2];
+    	struct message msg;
+      memcpy(msg.data, data, RXBUFFERSIZE * sizeof(uint8_t));
+      enum enqueue_result result1 = my_message_queue_enqueue(&queue, &msg);
+
+      stopBuzzer();
+      return;
+    }
+  }
+  stopBuzzer();
 }
 
 goHome()
@@ -430,27 +496,9 @@ goHome()
     return;
   }
 
-  int debounce = 0; 
-  int i = 1140;
-  while(i > 0)
-  {    
-    if(!HAL_GPIO_ReadPin(GPIOA, HOME_Pin))
-    {
-      if(debounce == 2)
-      {
-        stepper_step_angle(5,0);
-        position_state = 0;
-        angle_state = 0;
-        return;
-      } 
-      else
-      {
-        debounce = debounce+1;
-      }     
-    }
-    stepper_step_angle(1,0);
-    i = i-1;
-  }
+  int debounce = 0;  
+  stepper_step_angle(1140,0);
+
 
 }
 
@@ -511,6 +559,7 @@ int main(void)
   LoadConfigDispenserTime();
   
   goHome();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -520,19 +569,13 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-
+	  
 	  struct message msg;
 	  enum dequeue_result result2 = my_message_queue_dequeue(&queue, &msg);
 	  if (result2 == DEQUEUE_RESULT_SUCCESS) {
 		  memcpy(bluetooth_rxBuffer, msg.data, RXBUFFERSIZE * sizeof(uint8_t));
 		  Command();
 	  }
-
-    if(!HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13))
-    {
-    	stepper_step_angle(5,0);
-    }
   }
   /* USER CODE END 3 */
 }
@@ -728,9 +771,9 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 84;
+  htim3.Init.Prescaler = 692;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 100;
+  htim3.Init.Period = 254;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
